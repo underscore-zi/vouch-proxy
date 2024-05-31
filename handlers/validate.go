@@ -14,6 +14,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"path"
 	"reflect"
 	"strings"
 
@@ -35,24 +37,24 @@ func ValidateRequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	jwt := jwtmanager.FindJWT(r)
 	if jwt == "" {
-		send401or200PublicAccess(w, r, errNoJWT)
+		sendFailureOrPublicAccess(w, r, errNoJWT)
 		return
 	}
 
 	claims, err := jwtmanager.ClaimsFromJWT(jwt)
 	if err != nil {
-		send401or200PublicAccess(w, r, err)
+		sendFailureOrPublicAccess(w, r, err)
 		return
 	}
 
 	if claims.Username == "" {
-		send401or200PublicAccess(w, r, errNoUser)
+		sendFailureOrPublicAccess(w, r, errNoUser)
 		return
 	}
 
 	if !cfg.Cfg.AllowAllUsers {
 		if !claims.SiteInAudience(r.Host) {
-			send401or200PublicAccess(w, r,
+			sendFailureOrPublicAccess(w, r,
 				fmt.Errorf("http header 'Host: %s' not authorized for configured `vouch.domains` (is Host being sent properly?)", r.Host))
 			return
 		}
@@ -122,7 +124,7 @@ func generateCustomClaimsHeaders(w http.ResponseWriter, claims *jwtmanager.Vouch
 
 }
 
-func send401or200PublicAccess(w http.ResponseWriter, r *http.Request, e error) {
+func sendFailureOrPublicAccess(w http.ResponseWriter, r *http.Request, e error) {
 	if cfg.Cfg.PublicAccess {
 		log.Debugf("error: %s, but public access is '%v', returning OK200", e, cfg.Cfg.PublicAccess)
 		w.Header().Add(cfg.Cfg.Headers.User, "")
@@ -130,5 +132,35 @@ func send401or200PublicAccess(w http.ResponseWriter, r *http.Request, e error) {
 		return
 	}
 
+	if isForwardAuthRequest(r) {
+		sendForwardAuthFailure(w, r, e)
+		return
+	}
+
 	responses.Error401(w, r, e)
+}
+
+func isForwardAuthRequest(r *http.Request) bool {
+	return r.Header.Get("X-Forwarded-Proto") != "" && r.Header.Get("X-Forwarded-Host") != ""
+}
+
+func sendForwardAuthFailure(w http.ResponseWriter, r *http.Request, _ error) {
+	fwdProto := r.Header.Get("X-Forwarded-Proto")
+	fwdHost := r.Header.Get("X-Forwarded-Host")
+	fwdUri := r.Header.Get("X-Forwarded-Uri")
+
+	loginUrl, _ := url.Parse(r.URL.String())
+	if cfg.Cfg.DocumentRoot != "" {
+		loginUrl.Path = path.Join(cfg.Cfg.DocumentRoot, "login")
+	} else {
+		loginUrl.Path = "/login"
+	}
+
+	loginUrl.RawQuery = url.Values{
+		"url": {
+			fmt.Sprintf("%s://%s%s", fwdProto, fwdHost, fwdUri),
+		},
+	}.Encode()
+
+	responses.Redirect302(w, r, loginUrl.String())
 }
