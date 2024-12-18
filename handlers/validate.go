@@ -130,5 +130,19 @@ func send401or200PublicAccess(w http.ResponseWriter, r *http.Request, e error) {
 		return
 	}
 
+	if cfg.Cfg.ForwardAuthMode {
+		// Convert the ForwardAuth headers into a `url` param for the LoginHandler
+		fwdProto := r.Header.Get("X-Forwarded-Proto")
+		fwdHost := r.Header.Get("X-Forwarded-Host")
+		fwdUri := r.Header.Get("X-Forwarded-Uri")
+
+		params := r.URL.Query()
+		params.Set("url", fmt.Sprintf("%s://%s%s", fwdProto, fwdHost, fwdUri))
+		r.URL.RawQuery = params.Encode()
+
+		LoginHandler(w, r)
+		return
+	}
+
 	responses.Error401(w, r, e)
 }

@@ -259,3 +259,60 @@ func TestLoginErrTooManyRedirects(t *testing.T) {
 		})
 	}
 }
+func TestLoginForwardAuth(t *testing.T) {
+	validateHandler := http.HandlerFunc(ValidateRequestHandler)
+	loginHandler := http.HandlerFunc(LoginHandler)
+
+	setUp("/config/testing/handler_login_forwardauth.yml")
+
+	if cfg.Cfg.ForwardAuthMode != true {
+		t.Errorf("ForwardAuthMode should be configured to true")
+	}
+
+	// ForwardMode works by transparently translating a request to /validate with ForwardAuth headers into a request to
+	// /login with a `url` parameter. To test this we just need to ensure that the /validate request is equivalent to
+	// the corresponding /login request
+
+	req, err := http.NewRequest("GET", "http://example.com/validate", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	targetUrl, err := url.Parse("https://app.example.com/example/endpoint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Forwarded-Proto", targetUrl.Scheme)
+	req.Header.Set("X-Forwarded-Host", targetUrl.Host)
+	req.Header.Set("X-Forwarded-Uri", targetUrl.Path)
+
+	loginUrl := "http://example.com/login?" + url.Values{"url": []string{targetUrl.String()}}.Encode()
+	expectedReq, err := http.NewRequest("GET", loginUrl, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	validateHandler.ServeHTTP(rr, req)
+
+	expected := httptest.NewRecorder()
+	loginHandler.ServeHTTP(expected, expectedReq)
+
+	assert.Equal(t, rr.Code, expected.Code)
+	assert.NotEmpty(t, rr.Header().Get("Location"))
+	assert.NotEmpty(t, expected.Header().Get("Location"))
+
+	validateLocation, err := url.Parse(rr.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedLocation, err := url.Parse(expected.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert.Equal(t, validateLocation.Scheme, expectedLocation.Scheme)
+	assert.Equal(t, validateLocation.Host, expectedLocation.Host)
+	assert.Equal(t, validateLocation.Path, expectedLocation.Path)
+}
