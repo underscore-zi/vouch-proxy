@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 
@@ -136,12 +137,16 @@ func send401or200PublicAccess(w http.ResponseWriter, r *http.Request, e error) {
 		fwdHost := r.Header.Get("X-Forwarded-Host")
 		fwdUri := r.Header.Get("X-Forwarded-Uri")
 
-		params := r.URL.Query()
-		params.Set("url", fmt.Sprintf("%s://%s%s", fwdProto, fwdHost, fwdUri))
-		r.URL.RawQuery = params.Encode()
+		if loginUrl, err := url.Parse(r.URL.String()); err == nil {
+			loginUrl.RawPath = "/login"
 
-		LoginHandler(w, r)
-		return
+			params := loginUrl.Query()
+			params.Set("url", fmt.Sprintf("%s://%s%s", fwdProto, fwdHost, fwdUri))
+			loginUrl.RawQuery = params.Encode()
+
+			responses.Redirect302(w, r, loginUrl.String())
+			return
+		}
 	}
 
 	responses.Error401(w, r, e)
